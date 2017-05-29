@@ -1,0 +1,180 @@
+plugins {
+	id 'com.github.jlouns.cpe' version '0.4.1'
+}
+
+import java.nio.file.Path
+import java.nio.file.Files
+import java.nio.file.FileVisitResult
+import java.nio.file.SimpleFileVisitor
+import java.nio.file.attribute.*
+
+class AppendableDir {
+    def dir
+    AppendableDir(File fileDir) {
+       dir = fileDir.toPath()
+    }
+    
+    File with(String path) {
+        return dir.resolve(path).toFile()
+    }
+}
+
+def append(File dir) {
+   return new AppendableDir(dir)
+}
+
+class DeleteVisitor extends SimpleFileVisitor<Path> {
+   @Override
+   public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+     Files.delete(file);
+     return FileVisitResult.CONTINUE;
+   }
+
+   @Override
+   public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+     Files.delete(dir);
+     return FileVisitResult.CONTINUE;
+   }
+}
+
+def deleteRecursively(File file) {
+  Path directory = file.toPath()
+  Files.walkFileTree(directory, new DeleteVisitor());
+}
+
+
+
+ext {
+    swaggerBaseDir = append buildDir with "swagger/"
+    swaggerUIDir = append swaggerBaseDir with "swagger-ui"
+    swaggerUIDistDir = append swaggerUIDir with "dist-build"
+    swaggerEditorDir = append swaggerBaseDir with "swagger-editor"
+    swaggerEditorZip = "swagger-editor.zip"
+    swaggerJson = "swagger.json"
+}
+
+task createBuildDir {
+  outputs.dir(buildDir)
+  doLast {
+    buildDir.mkdirs()
+  }
+}
+
+task createSwaggerDir {
+  inputs.file(createBuildDir)
+  outputs.dir(swaggerBaseDir)
+  doLast {
+    swaggerBaseDir.mkdirs()
+  }
+}
+
+task cloneSwaggerUI(type: CrossPlatformExec) {
+//task cloneSwaggerUI(type: Exec) {
+    def swaggerUI = 'swagger-ui/'
+    dependsOn createSwaggerDir
+    inputs.file(createSwaggerDir)
+    outputs.dir(swaggerUIDir)
+    
+    def uri = "https://github.com/swagger-api/swagger-ui.git"
+    
+    workingDir swaggerBaseDir
+    commandLine 'git','clone',uri,swaggerUI
+    ignoreExitValue true
+}
+
+task swaggerUIcopyDist(type: Copy) {
+
+     def wokringDir = append swaggerUIDir with "dist"
+     def indexHtml = append wokringDir with "index.html"
+     def destDir = append swaggerUIDir with "dist-build"
+     
+     inputs.file cloneSwaggerUI
+     outputs.dir destDir
+     
+     from (wokringDir) { 
+         include "**/*"
+     }
+     into destDir
+     
+     exclude 'index.html'
+}
+
+task swaggerUIcreateIndexHtmlCopy(type: Copy) {
+
+     def workingFile = append swaggerUIDir with "dist/index.html"
+     def destDir = append swaggerUIDir with "dist-build"
+     def destFile = append destDir with "index.html"
+     
+     inputs.file cloneSwaggerUI
+     outputs.file destFile
+     
+     
+     def urlPattern = /http:\/\/petstore\.swagger\.io\/v2\/swagger\.json/
+     def urlReplacement = ''
+     
+     def newLine = System.getProperty("line.separator")
+     
+     
+     from workingFile
+     into destDir
+     
+     filter {
+         it.replaceAll(urlPattern,urlReplacement)
+     }
+     
+     def windowPattern = "window.swaggerUi = new SwaggerUi({"
+     def windowAppend = "        spec: spec,"
+     filter {
+     	 if (it.trim().startsWith(windowPattern)) {
+     	     it+newLine+windowAppend
+     	 } else 
+     	     it
+     }
+     
+     def jsonSpecContent = file(swaggerJson).text
+     def jsonPrepend = "      var spec = $jsonSpecContent;" 
+     
+     filter {
+     	 if (it.trim().startsWith(windowPattern)) {
+     	     jsonPrepend+newLine+it
+     	 } else 
+     	     it
+     }
+}
+
+task createSwaggerUI {
+    dependsOn cloneSwaggerUI
+     
+    dependsOn swaggerUIcopyDist
+    dependsOn swaggerUIcreateIndexHtmlCopy
+}
+
+task printSwaggerUIUrl {
+    dependsOn swaggerUIcopyDist
+    dependsOn swaggerUIcreateIndexHtmlCopy
+
+    outputs.upToDateWhen {false}
+    
+    doLast {
+      def uri = append swaggerUIDistDir with 'index.html' toURI()
+      print 'open the follwing uri in your web browser: '
+      println uri
+    }
+}
+
+task runSwaggerUI(type: CrossPlatformExec) {
+    inputs.file(cloneSwaggerUI)
+    outputs.upToDateWhen { false }
+    
+    workingDir swaggerUIDistDir
+    
+    def uri = append swaggerUIDistDir with 'index.html' toURI()
+    commandLine 'xdg-open',uri
+}
+
+task clean {
+  doLast {
+    deleteRecursively(buildDir)
+  }
+}
+
